@@ -1,0 +1,63 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+
+env:
+  rust_version: "1.82.0"
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        shell: pwsh
+        run: |
+          # Download GStreamer MSIs directly (choco is unreliable for GStreamer)
+          $GST_VER = "1.24.12"
+          $BASE_URL = "https://gstreamer.freedesktop.org/data/pkg/windows/$GST_VER/msvc"
+
+          Write-Host "Downloading GStreamer $GST_VER runtime..."
+          Invoke-WebRequest -Uri "$BASE_URL/gstreamer-1.0-msvc-x86_64-$GST_VER.msi" -OutFile gst-runtime.msi
+          Write-Host "Downloading GStreamer $GST_VER devel..."
+          Invoke-WebRequest -Uri "$BASE_URL/gstreamer-1.0-devel-msvc-x86_64-$GST_VER.msi" -OutFile gst-devel.msi
+
+          Write-Host "Installing GStreamer runtime..."
+          Start-Process msiexec.exe -ArgumentList "/i gst-runtime.msi ADDLOCAL=ALL /qn /norestart" -Wait -NoNewWindow
+          Write-Host "Installing GStreamer devel..."
+          Start-Process msiexec.exe -ArgumentList "/i gst-devel.msi ADDLOCAL=ALL /qn /norestart" -Wait -NoNewWindow
+
+          # Set env vars
+          $gstRoot = "$env:SYSTEMDRIVE\gstreamer\1.0\msvc_x86_64\"
+          if (-not (Test-Path $gstRoot)) { $gstRoot = "D:\gstreamer\1.0\msvc_x86_64\" }
+          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gstRoot" >> $env:GITHUB_ENV
+          echo "$gstRoot\bin" >> $env:GITHUB_PATH
+
+          # Install protoc
+          choco install -y --no-progress protoc
+
+          # Install OpenSSL
+          choco install -y --no-progress openssl
+          $sslDir = "$env:SYSTEMDRIVE\Program Files\OpenSSL-Win64\"
+          if (-not (Test-Path $sslDir)) { $sslDir = "$env:SYSTEMDRIVE\Program Files\OpenSSL\" }
+          echo "OPENSSL_DIR=$sslDir" >> $env:GITHUB_ENV
+
+          # Verify
+          Write-Host "PKG_CONFIG_PATH will be: $gstRoot\lib\pkgconfig"
+          echo "PKG_CONFIG_PATH=$gstRoot\lib\pkgconfig" >> $env:GITHUB_ENV
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_version }}
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neolink-windows
+          path: target/release/neolink.exe
